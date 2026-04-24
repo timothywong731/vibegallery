@@ -17,6 +17,7 @@ from .scanner import scan_gallery
 app = FastAPI(title="Photo Gallery Web App")
 
 app.mount("/images", StaticFiles(directory=settings.gallery_root), name="images")
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 

@@ -60,6 +60,7 @@
     <div class="ctrl-group">
       <span class="ctrl-label">Directory</span>
       <input type="text" id="directory" placeholder="(default)" title="Path to image folder" />
+      <input type="file" id="dir-file-input" style="display:none" webkitdirectory multiple accept="image/*" />
       <button id="pick-dir-btn" class="btn-icon btn-icon-sm" onclick="pickLocalDir()" title="Browse local folders">
         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
@@ -509,49 +510,43 @@ async function confirmLbDelete(){
 }
 
 // ── Local directory picker ──────────────────────────────────────────
-let localDirHandle  = null;
 let localImageFiles = [];   // Array of blob: URLs
 let isLocalMode     = false;
+let localDirName    = '';
 
 const LOCAL_IMAGE_EXTS = new Set([
   '.jpg','.jpeg','.png','.gif','.webp','.bmp','.tiff','.tif','.avif','.heic','.heif'
 ]);
 
-async function scanDirHandle(dirHandle, out){
-  for await (const [name, handle] of dirHandle){
-    if(handle.kind === 'file'){
-      const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
-      if(LOCAL_IMAGE_EXTS.has(ext)){
-        const file = await handle.getFile();
-        out.push(URL.createObjectURL(file));
-      }
-    } else if(handle.kind === 'directory' && !name.startsWith('.')){
-      await scanDirHandle(handle, out);
-    }
-  }
+function pickLocalDir(){
+  const input = $id('dir-file-input');
+  // Reset so re-selecting the same folder still fires 'change'
+  input.value = '';
+  input.click();
 }
 
-async function pickLocalDir(){
-  if(!window.showDirectoryPicker){
-    toast('Your browser does not support local folder picking', true);
-    return;
-  }
-  let dirHandle;
-  try {
-    dirHandle = await window.showDirectoryPicker();
-  } catch(e){
-    if(e.name !== 'AbortError') toast('Error: ' + e, true);
-    return;
-  }
+function onDirFilesSelected(files){
   // Revoke old object URLs
   localImageFiles.forEach(u => URL.revokeObjectURL(u));
   localImageFiles = [];
-  toast('Scanning…');
-  await scanDirHandle(dirHandle, localImageFiles);
-  localDirHandle = dirHandle;
-  isLocalMode    = true;
-  const dirInput = $id('directory');
-  dirInput.value    = dirHandle.name;
+
+  const imageFiles = Array.from(files).filter(f => {
+    const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+    return LOCAL_IMAGE_EXTS.has(ext);
+  });
+
+  if(imageFiles.length === 0){ toast('No images found in selected folder', true); return; }
+
+  // Derive folder name from the first file's relative path (webkitRelativePath = "folder/...")
+  localDirName = imageFiles[0].webkitRelativePath
+    ? imageFiles[0].webkitRelativePath.split('/')[0]
+    : 'local';
+
+  localImageFiles = imageFiles.map(f => URL.createObjectURL(f));
+  isLocalMode     = true;
+
+  const dirInput    = $id('directory');
+  dirInput.value    = localDirName;
   dirInput.readOnly = true;
   toast(`Found ${localImageFiles.length} image${localImageFiles.length !== 1 ? 's' : ''}`);
 }
@@ -581,7 +576,7 @@ function fetchLocalRandom(){
     chosen = [...indices].map(i => localImageFiles[i]);
   }
 
-  const data  = { images: chosen, total, rows, cols, refresh, directory: localDirHandle.name };
+  const data  = { images: chosen, total, rows, cols, refresh, directory: localDirName };
   const entry = { images: chosen, rows, cols, data };
   pushHistory(entry);
   buildGrid(chosen, rows, cols);
@@ -726,6 +721,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initial nav state
   updateNav();
+
+  // Wire local folder file input
+  $id('dir-file-input').addEventListener('change', e => onDirFilesSelected(e.target.files));
 
   // When user manually edits the directory text box, exit local mode
   $id('directory').addEventListener('input', () => {
