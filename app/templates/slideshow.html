@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<script>const GALLERY_ROOT = {{ settings.gallery_root | tojson }};</script>
+<script>const GALLERY_ROOT = {{ settings.gallery_root | string | tojson }};</script>
 
 <div id="grid-wrap">
   <div id="grid-a" class="grid-layer"></div>
