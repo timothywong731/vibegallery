@@ -9,9 +9,10 @@ COPY pyproject.toml poetry.lock README.md ./
 RUN pip install --no-cache-dir \
     "pillow>=11.3.0,<12.0.0" \
     "fastapi>=0.112.0,<1.0.0" \
-    "uvicorn[standard]>=0.30.0,<0.31.0" \
+    "starlette>=0.41.0,<1.0.0" \
+    "uvicorn[standard]>=0.30.0,<1.0.0" \
     "jinja2>=3.1.0,<4.0.0" \
-    "python-multipart>=0.0.9,<0.0.10" \
+    "python-multipart>=0.0.9,<1.0.0" \
     "httpx>=0.24.0,<1.0.0"
 
 # Copy application source and install the package (no-deps: already installed above)

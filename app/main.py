@@ -114,7 +114,7 @@ async def serve(path: str):
 
 @app.get("/slideshow", response_class=HTMLResponse)
 async def slideshow(request: Request):
-    return templates.TemplateResponse("slideshow.html", {"request": request, "settings": settings})
+    return templates.TemplateResponse(request, "slideshow.html", {"settings": settings})
 
 
 @app.get("/api/pick-directory")
