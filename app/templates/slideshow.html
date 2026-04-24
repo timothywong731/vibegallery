@@ -430,17 +430,15 @@ async function doDelete(cell, path){
   try {
     const res = await fetch(`/api/image?path=${encodeURIComponent(path)}`, {method:'DELETE'});
     if(!res.ok){ toast('Delete failed: ' + (await res.text()), true); return; }
-    // Remove from lightbox path list
     lbPaths = lbPaths.filter(p => p !== path);
-    // Close lightbox if it was showing this image
     if($id('lightbox').classList.contains('open') && lbIdx !== -1 &&
        lbPaths.indexOf(path) === -1){
       closeLightbox();
     }
     cell.style.transition = 'opacity .3s ease';
     cell.style.opacity    = '0';
-    setTimeout(() => cell.remove(), 320);
     toast('Deleted');
+    setTimeout(() => { cell.remove(); fetchRandom(); }, 350);
   } catch(e){
     toast('Error: ' + e, true);
   }
@@ -494,16 +492,11 @@ async function confirmLbDelete(){
     if(cell){
       cell.style.transition = 'opacity .3s ease';
       cell.style.opacity    = '0';
-      setTimeout(() => cell.remove(), 320);
+      setTimeout(() => cell.remove(), 350);
     }
     toast('Deleted');
-    if(!lbPaths.length){
-      closeLightbox();
-    } else {
-      lbIdx = Math.min(lbIdx, lbPaths.length - 1);
-      _lbLoad(lbPaths[lbIdx]);
-      hideLbConfirm();
-    }
+    closeLightbox();
+    fetchRandom();
   } catch(e){
     toast('Error: ' + e, true);
   }
