@@ -1,0 +1,19 @@
+services:
+  gallery:
+    image: timothywong/gallery:latest   # replace with your Docker Hub username
+    container_name: gallery
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount your photo library (read-only recommended)
+      - /share/Multimedia:/photos:ro
+      # Persist the thumbnail cache
+      - gallery-cache:/cache
+    environment:
+      GALLERY_ROOT: /photos
+      GALLERY_CACHE: /cache
+      GALLERY_PORT: "8000"
+
+volumes:
+  gallery-cache:

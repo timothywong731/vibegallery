@@ -1,0 +1,10 @@
+.git
+.github
+.cache
+.venv
+.vscode
+__pycache__
+*.pyc
+*.pyo
+images/
+tests/

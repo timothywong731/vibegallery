@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block content %}
+  {% if images %}
+    <div class="grid">
+      {% for img in images %}
+        <div class="card">
+            <a href="/images/{{ img.rel_path }}" target="_blank"><img src="/images/{{ img.rel_path }}" alt="{{ img.rel_path }}" loading="lazy" /></a>
+            <div class="meta">
+                {{ img.rel_path }}<br>
+                {% if img.width and img.height %}{{ img.width }}×{{ img.height }} • {% endif %}{{ (img.size / 1024)|round(1) }} KB
+            </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+     <p class="empty">No images found in the gallery. Use the slideshow page to point to a local directory.</p>
+  {% endif %}
+{% endblock %}
