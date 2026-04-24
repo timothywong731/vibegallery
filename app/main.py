@@ -117,26 +117,21 @@ async def slideshow(request: Request):
     return templates.TemplateResponse(request, "slideshow.html", {"settings": settings})
 
 
-@app.get("/api/pick-directory")
-async def pick_directory():
-    """Open a native OS folder-picker dialog and return the chosen path."""
-    import asyncio
-
-    def _pick() -> str | None:
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-            root = tk.Tk()
-            root.withdraw()
-            root.wm_attributes("-topmost", True)
-            path = filedialog.askdirectory(title="Select Image Directory")
-            root.destroy()
-            return path or None
-        except Exception:
-            return None
-
-    path = await asyncio.to_thread(_pick)
-    return {"path": path}
+@app.get("/api/browse")
+async def browse_directory(path: str = ""):
+    """List subdirectories at the given server path for the in-browser folder picker."""
+    p = Path(path).expanduser().resolve() if path else settings.gallery_root
+    if not p.exists() or not p.is_dir():
+        raise HTTPException(status_code=404, detail="Not a directory")
+    try:
+        dirs = sorted(
+            d.name for d in p.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    parent = str(p.parent) if p != p.parent else None
+    return {"path": str(p), "parent": parent, "dirs": dirs}
 
 
 @app.delete("/api/image")
