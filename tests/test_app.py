@@ -35,7 +35,17 @@ def test_empty_gallery():
     # Index now redirects to slideshow; follow redirect or return slideshow HTML
     assert r.status_code in (200, 302, 307)
     if r.status_code == 200:
-        assert b'Random Slideshow' in r.content
+        assert b'Press Play to start' in r.content
+
+
+def test_slideshow_template_includes_batch_preloader():
+    r = client.get('/slideshow')
+    assert r.status_code == 200
+    html = r.text
+    assert 'PRELOAD_QUEUE_TARGET' in html
+    assert 'function ensurePreloadQueue' in html
+    assert 'function getNextPreloadedBatch' in html
+    assert 'function warmBatchImages' in html
 
 
 def test_upload_image():

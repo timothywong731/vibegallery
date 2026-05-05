@@ -429,6 +429,12 @@ let isPlaying   = false;
 let activeLayer = 'a';         // which grid-layer is currently visible
 let lightboxPausedPlayback = false;
 
+const PRELOAD_QUEUE_TARGET = 2;
+const PRELOAD_IMAGE_TIMEOUT_MS = 8000;
+const preloadQueue = [];
+const preloadJobs = new Set();
+let preloadGeneration = 0;
+
 // Page history: each entry is { images: string[], rows, cols }
 const pageHistory = [];
 let   histIdx     = -1;
@@ -439,6 +445,10 @@ let lbIdx   = -1;   // index of currently shown image
 
 // ── DOM helpers ────────────────────────────────────────────────────
 function $id(id){ return document.getElementById(id); }
+
+function imageUrlForPath(path){
+  return path.startsWith('blob:') ? path : `/serve?path=${encodeURIComponent(path)}`;
+}
 
 function canDeletePath(path){
   return !!path && !path.startsWith('blob:');
@@ -470,6 +480,158 @@ function syncCurrentEntryAfterDelete(path){
 }
 
 // ── Grid rendering ─────────────────────────────────────────────────
+function clearPreloadQueue(){
+  preloadGeneration++;
+  preloadQueue.splice(0);
+}
+
+function resetPreloadQueue(){
+  clearPreloadQueue();
+  if(isPlaying || pageHistory.length > 0){
+    ensurePreloadQueue();
+  }
+}
+
+function activePreloadJobCount(){
+  let count = 0;
+  preloadJobs.forEach(job => {
+    if(job.generation === preloadGeneration) count++;
+  });
+  return count;
+}
+
+function warmImage(url){
+  return new Promise(resolve => {
+    const img = new Image();
+    let settled = false;
+    const done = () => {
+      if(settled) return;
+      settled = true;
+      img.onload = null;
+      img.onerror = null;
+      resolve();
+    };
+    const timeout = setTimeout(done, PRELOAD_IMAGE_TIMEOUT_MS);
+    img.onload = () => { clearTimeout(timeout); done(); };
+    img.onerror = () => { clearTimeout(timeout); done(); };
+    img.src = url;
+  });
+}
+
+async function warmBatchImages(entry){
+  entry.imageUrls = entry.images.map(imageUrlForPath);
+  await Promise.all(entry.imageUrls.map(warmImage));
+  entry.preloaded = true;
+  return entry;
+}
+
+function currentBatchSettings(){
+  const rows    = parseInt($id('rows').value)    || 2;
+  const cols    = parseInt($id('cols').value)    || 3;
+  const refresh = parseInt($id('refresh').value) || 5;
+  return { rows, cols, refresh };
+}
+
+async function fetchRandomBatch(){
+  const { rows, cols, refresh } = currentBatchSettings();
+  const params = new URLSearchParams({rows, cols, refresh});
+  const dir = $id('directory').value.trim();
+  if(dir) params.append('directory', dir);
+
+  const res = await fetch('/api/random?' + params);
+  if(!res.ok){
+    const error = new Error('Error ' + res.status);
+    error.statusText = 'Error ' + res.status;
+    throw error;
+  }
+
+  const data = await res.json();
+  return { images: data.images, rows: data.rows, cols: data.cols, data };
+}
+
+function createLocalRandomBatch(){
+  const { rows, cols, refresh } = currentBatchSettings();
+  const needed = rows * cols;
+  const total = localImageFiles.length;
+
+  if(total === 0) return null;
+
+  let chosen;
+  if(total <= needed){
+    chosen = [...localImageFiles];
+    for(let i = chosen.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [chosen[i], chosen[j]] = [chosen[j], chosen[i]];
+    }
+  } else {
+    const indices = new Set();
+    while(indices.size < needed) indices.add(Math.floor(Math.random() * total));
+    chosen = [...indices].map(i => localImageFiles[i]);
+  }
+
+  const data = { images: chosen, total, rows, cols, refresh, directory: localDirName };
+  return { images: chosen, rows, cols, data };
+}
+
+async function preloadOneBatch(generation){
+  const job = { generation };
+  preloadJobs.add(job);
+  try {
+    const entry = isLocalMode ? createLocalRandomBatch() : await fetchRandomBatch();
+    if(!entry) return null;
+    await warmBatchImages(entry);
+    if(generation === preloadGeneration && entry.images.length > 0){
+      preloadQueue.push(entry);
+    }
+    return entry;
+  } finally {
+    preloadJobs.delete(job);
+  }
+}
+
+function ensurePreloadQueue(){
+  const generation = preloadGeneration;
+  while(preloadQueue.length + activePreloadJobCount() < PRELOAD_QUEUE_TARGET){
+    preloadOneBatch(generation).catch(() => {});
+  }
+}
+
+async function getNextPreloadedBatch(){
+  while(preloadQueue.length && preloadQueue[0].images.length === 0){
+    preloadQueue.shift();
+  }
+
+  const entry = preloadQueue.shift();
+  if(entry){
+    ensurePreloadQueue();
+    return entry;
+  }
+
+  const fallback = isLocalMode ? createLocalRandomBatch() : await fetchRandomBatch();
+  ensurePreloadQueue();
+  return fallback;
+}
+
+function removePathFromPreloadQueue(path){
+  const url = imageUrlForPath(path);
+  for(let i = preloadQueue.length - 1; i >= 0; i--){
+    const entry = preloadQueue[i];
+    entry.images = entry.images.filter(p => p !== path);
+    if(entry.data){
+      entry.data.images = entry.data.images.filter(p => p !== path);
+      if(typeof entry.data.total === 'number'){
+        entry.data.total = Math.max(0, entry.data.total - 1);
+      }
+    }
+    if(entry.imageUrls){
+      entry.imageUrls = entry.imageUrls.filter(u => u !== url);
+    }
+    if(entry.images.length === 0){
+      preloadQueue.splice(i, 1);
+    }
+  }
+}
+
 function buildGrid(images, rows, cols){
   lbPaths = [...images];
 
@@ -488,7 +650,7 @@ function buildGrid(images, rows, cols){
     cell.className    = 'cell';
     cell.dataset.path = path;
     const img = document.createElement('img');
-    img.src     = path.startsWith('blob:') ? path : `/serve?path=${encodeURIComponent(path)}`;
+    img.src     = imageUrlForPath(path);
     img.loading = 'lazy';
     img.alt     = '';
     cell.appendChild(img);
@@ -545,6 +707,8 @@ async function doDelete(cell, path){
   try {
     const res = await fetch(`/api/image?path=${encodeURIComponent(path)}`, {method:'DELETE'});
     if(!res.ok){ toast('Delete failed: ' + (await res.text()), true); return; }
+    syncCurrentEntryAfterDelete(path);
+    removePathFromPreloadQueue(path);
     lbPaths = lbPaths.filter(p => p !== path);
     if($id('lightbox').classList.contains('open') && lbIdx !== -1 &&
        lbPaths.indexOf(path) === -1){
@@ -567,6 +731,7 @@ function removeLocalImage(cell, path){
   }
 
   const entry = syncCurrentEntryAfterDelete(path);
+  removePathFromPreloadQueue(path);
 
   cell.style.transition = 'opacity .3s ease';
   cell.style.opacity = '0';
@@ -618,7 +783,7 @@ function _lbLoad(path){
   syncLightboxDeleteButton(path);
   img.style.opacity = '0';
   img.onload = () => { img.style.opacity = '1'; };
-  img.src = path.startsWith('blob:') ? path : `/serve?path=${encodeURIComponent(path)}`;
+  img.src = imageUrlForPath(path);
 }
 
 function lbNavigate(dir){
@@ -658,6 +823,7 @@ async function confirmLbDelete(){
     const res = await fetch(`/api/image?path=${encodeURIComponent(path)}`, {method:'DELETE'});
     if(!res.ok){ toast('Delete failed: ' + (await res.text()), true); return; }
     const entry = syncCurrentEntryAfterDelete(path);
+    removePathFromPreloadQueue(path);
     if(cell){
       cell.style.transition = 'opacity .3s ease';
       cell.style.opacity    = '0';
@@ -716,39 +882,21 @@ function onDirFilesSelected(files){
   const dirInput    = $id('directory');
   dirInput.value    = localDirName;
   dirInput.readOnly = true;
+  resetPreloadQueue();
   toast(`Found ${localImageFiles.length} image${localImageFiles.length !== 1 ? 's' : ''}`);
 }
 
 function fetchLocalRandom(){
-  const rows    = parseInt($id('rows').value)    || 2;
-  const cols    = parseInt($id('cols').value)    || 3;
-  const refresh = parseInt($id('refresh').value) || 5;
-  const needed  = rows * cols;
-  const total   = localImageFiles.length;
-
-  if(total === 0){
+  const entry = createLocalRandomBatch();
+  if(!entry){
     $id('status').textContent = 'No images found';
     return;
   }
 
-  let chosen;
-  if(total <= needed){
-    chosen = [...localImageFiles];
-    for(let i = chosen.length - 1; i > 0; i--){
-      const j = Math.floor(Math.random() * (i + 1));
-      [chosen[i], chosen[j]] = [chosen[j], chosen[i]];
-    }
-  } else {
-    const indices = new Set();
-    while(indices.size < needed) indices.add(Math.floor(Math.random() * total));
-    chosen = [...indices].map(i => localImageFiles[i]);
-  }
-
-  const data  = { images: chosen, total, rows, cols, refresh, directory: localDirName };
-  const entry = { images: chosen, rows, cols, data };
   pushHistory(entry);
-  buildGrid(chosen, rows, cols);
-  updateStatus(data);
+  buildGrid(entry.images, entry.rows, entry.cols);
+  updateStatus(entry.data);
+  ensurePreloadQueue();
 }
 
 // ── History helpers ─────────────────────────────────────────────────
@@ -785,24 +933,18 @@ function updateStatus(data){
 
 // ── Fetch random page ───────────────────────────────────────────────
 async function fetchRandom(){
-  if(isLocalMode){ fetchLocalRandom(); return; }
-  const rows    = parseInt($id('rows').value)    || 2;
-  const cols    = parseInt($id('cols').value)    || 3;
-  const refresh = parseInt($id('refresh').value) || 5;
-  const params  = new URLSearchParams({rows, cols, refresh});
-  const dir = $id('directory').value.trim();
-  if(dir) params.append('directory', dir);
-
   try {
-    const res = await fetch('/api/random?' + params);
-    if(!res.ok){ $id('status').textContent = 'Error ' + res.status; return; }
-    const data = await res.json();
-    const entry = {images: data.images, rows: data.rows, cols: data.cols, data};
+    const entry = await getNextPreloadedBatch();
+    if(!entry){
+      $id('status').textContent = 'No images found';
+      return;
+    }
     pushHistory(entry);
     buildGrid(entry.images, entry.rows, entry.cols);
-    updateStatus(data);
+    updateStatus(entry.data);
+    ensurePreloadQueue();
   } catch(e){
-    $id('status').textContent = 'Fetch error';
+    $id('status').textContent = e.statusText || 'Fetch error';
   }
 }
 
@@ -913,10 +1055,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const slider = $id('refresh');
   const num    = $id('refresh-num');
   slider.addEventListener('input',  () => num.value = slider.value);
+  slider.addEventListener('change', resetPreloadQueue);
   num.addEventListener('change', () => {
     let v = Math.max(1, Math.min(3600, parseInt(num.value) || 1));
     num.value = v; slider.value = v;
+    resetPreloadQueue();
   });
+  $id('rows').addEventListener('change', resetPreloadQueue);
+  $id('cols').addEventListener('change', resetPreloadQueue);
 
   // Initial nav state
   updateNav();
@@ -953,6 +1099,7 @@ document.addEventListener('DOMContentLoaded', () => {
       isLocalMode = false;
       $id('directory').readOnly = false;
     }
+    resetPreloadQueue();
   });
 
   // Lightbox wiring
